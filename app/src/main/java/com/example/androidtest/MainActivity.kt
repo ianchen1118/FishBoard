@@ -87,7 +87,9 @@ data class FishRecord(
     val correctedLengthMm: Int?,
     val reviewed: Boolean,
     val notes: String?,
-    val photoPath: String?
+    val photoFilename: String,
+    val photoRelativePath: String,
+    val photoUri: String?
 )
 
 @Composable
@@ -551,6 +553,7 @@ fun RecordDetailScreen(
             Text("Session: ${record.sessionId}")
             Text("Captured: ${record.formattedTimestamp()}")
             Text("Internal ID: ${record.internalId}")
+            Text("Photo: ${record.photoRelativePath}")
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -691,6 +694,23 @@ fun ExportScreen(
 
         InfoCard {
             Text(
+                text = "Package Layout Preview",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = records.toExportPackagePreview(),
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        InfoCard {
+            Text(
                 text = "Next Export Step",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
@@ -768,6 +788,7 @@ fun RecordSummary(record: FishRecord) {
     }
     Text("Session: ${record.sessionId}")
     Text("Fish number: ${record.fishNumber}")
+    Text("Photo: ${record.photoFilename}")
     Text("Captured: ${record.formattedTimestamp()}")
     Text("Reviewed: ${if (record.reviewed) "Yes" else "No"}")
 }
@@ -844,6 +865,8 @@ fun createFakeFishRecord(
     val species = fakeSpecies[(fishNumber - 1) % fakeSpecies.size]
     val confidence = if (species == "Unknown") null else 0.70 + (fishNumber % 4) * 0.06
     val fishPart = "F${fishNumber.toString().padStart(6, '0')}"
+    val photoFilename = "${session.sessionId}-$fishPart.jpg"
+    val photoRelativePath = "images/${session.sessionId}/$photoFilename"
 
     return FishRecord(
         internalId = UUID.randomUUID().toString(),
@@ -859,7 +882,9 @@ fun createFakeFishRecord(
         correctedLengthMm = null,
         reviewed = false,
         notes = null,
-        photoPath = null
+        photoFilename = photoFilename,
+        photoRelativePath = photoRelativePath,
+        photoUri = null
     )
 }
 
@@ -873,6 +898,10 @@ fun Long.formatDateCode(): String {
 
 fun Long.formatTimestamp(): String {
     return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(this))
+}
+
+fun Long.formatExportDate(): String {
+    return SimpleDateFormat("yyyy_MM_dd", Locale.US).format(Date(this))
 }
 
 fun List<FishRecord>.toFishBoardCsv(): String {
@@ -889,7 +918,8 @@ fun List<FishRecord>.toFishBoardCsv(): String {
         "lengthConfidence",
         "correctedLengthMm",
         "reviewed",
-        "photoPath",
+        "photoFilename",
+        "photoRelativePath",
         "notes"
     )
 
@@ -907,7 +937,8 @@ fun List<FishRecord>.toFishBoardCsv(): String {
             record.lengthConfidence.asCsvNumber(),
             record.correctedLengthMm?.toString().orEmpty(),
             record.reviewed.toString(),
-            record.photoPath.orEmpty(),
+            record.photoFilename,
+            record.photoRelativePath,
             record.notes.orEmpty()
         )
     }
@@ -916,6 +947,24 @@ fun List<FishRecord>.toFishBoardCsv(): String {
         .joinToString(separator = "\n") { row ->
             row.joinToString(separator = ",") { value -> value.toCsvCell() }
         }
+}
+
+fun List<FishRecord>.toExportPackagePreview(): String {
+    if (isEmpty()) {
+        return "FishBoardExport_YYYY_MM_DD.zip\n|-- records.csv\n|-- images/"
+    }
+
+    val imageLines = groupBy { it.sessionId }.flatMap { (sessionId, sessionRecords) ->
+        listOf("|   |-- $sessionId/") + sessionRecords.map { record ->
+            "|       |-- ${record.photoFilename}"
+        }
+    }
+
+    return (listOf(
+        "FishBoardExport_${first().timestampMillis.formatExportDate()}.zip",
+        "|-- records.csv",
+        "|-- images/"
+    ) + imageLines).joinToString("\n")
 }
 
 fun Double?.asPercentSuffix(): String {

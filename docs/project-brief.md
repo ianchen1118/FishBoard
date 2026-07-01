@@ -218,10 +218,27 @@ Use separate storage for photos and metadata:
 ```text
 photos -> phone file storage
 metadata -> Room database
-photoPath -> stored in database
+photo filename and relative path -> stored in database
 ```
 
 Do not store full image bytes directly inside the database.
+
+Each fish image should have a stable filename derived from the display fish ID:
+
+```text
+20260701-PIER01-D03-S001-F000001.jpg
+```
+
+Inside exports, photos should be organized by session:
+
+```text
+images/
+|-- 20260701-PIER01-D03-S001/
+    |-- 20260701-PIER01-D03-S001-F000001.jpg
+    |-- 20260701-PIER01-D03-S001-F000002.jpg
+```
+
+The CSV should not contain raw image bytes. It should contain the image filename and relative image path so each row can point back to the matching exported image.
 
 ## Export Shape
 
@@ -231,8 +248,9 @@ Exports should support CSV and images, eventually as a ZIP package:
 FishBoardExport_YYYY_MM_DD.zip
 |-- records.csv
 |-- images/
-    |-- F000001.jpg
-    |-- F000002.jpg
+    |-- SESSION_ID/
+        |-- SESSION_ID-F000001.jpg
+        |-- SESSION_ID-F000002.jpg
 ```
 
 Example CSV fields:
