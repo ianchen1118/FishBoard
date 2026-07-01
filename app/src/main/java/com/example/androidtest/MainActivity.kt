@@ -1,5 +1,7 @@
 package com.example.androidtest
 
+import android.content.Context
+import android.os.Environment
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -29,13 +31,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.androidtest.ui.theme.AndroidTestTheme
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -90,6 +98,13 @@ data class FishRecord(
     val photoFilename: String,
     val photoRelativePath: String,
     val photoUri: String?
+)
+
+data class ExportPackageResult(
+    val file: File,
+    val recordCount: Int,
+    val imageCount: Int,
+    val missingImageCount: Int
 )
 
 @Composable
@@ -670,8 +685,11 @@ fun ExportScreen(
     records: List<FishRecord>,
     onBackClick: () -> Unit
 ) {
+    val context = LocalContext.current
     val reviewedCount = records.count { it.reviewed }
     var showTechnicalPreview by remember { mutableStateOf(false) }
+    var exportResult by remember { mutableStateOf<ExportPackageResult?>(null) }
+    var exportError by remember { mutableStateOf<String?>(null) }
     val csvPreview = remember(records) {
         records.toFishBoardCsv()
     }
@@ -710,6 +728,46 @@ fun ExportScreen(
                 Text("Ready to package records and linked fish photos.")
                 Text("${records.size} CSV rows")
                 Text("${records.size} linked photo files")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Button(
+            onClick = {
+                val result = runCatching {
+                    context.exportFishBoardRecords(records)
+                }
+                exportResult = result.getOrNull()
+                exportError = result.exceptionOrNull()?.message
+            },
+            enabled = records.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Create Export Package")
+        }
+
+        if (exportResult != null || exportError != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+
+            InfoCard {
+                Text(
+                    text = if (exportResult != null) "Export Created" else "Export Failed",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                val result = exportResult
+                if (result != null) {
+                    Text(result.file.name)
+                    Text("${result.recordCount} records exported")
+                    Text("${result.imageCount} photos included")
+                    if (result.missingImageCount > 0) {
+                        Text("${result.missingImageCount} photos not available yet")
+                    }
+                } else {
+                    Text(exportError ?: "Unknown export error")
+                }
             }
         }
 
@@ -759,6 +817,20 @@ fun ExportScreen(
                     text = records.toExportPackagePreview(),
                     style = MaterialTheme.typography.bodySmall
                 )
+            }
+
+            val result = exportResult
+            if (result != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+
+                InfoCard {
+                    Text(
+                        text = "Saved File",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(result.file.absolutePath)
+                }
             }
         }
 
@@ -948,6 +1020,10 @@ fun Long.formatExportDate(): String {
     return SimpleDateFormat("yyyy_MM_dd", Locale.US).format(Date(this))
 }
 
+fun Long.formatExportDateTime(): String {
+    return SimpleDateFormat("yyyy_MM_dd_HHmmss", Locale.US).format(Date(this))
+}
+
 fun List<FishRecord>.toFishBoardCsv(): String {
     val header = listOf(
         "internalId",
@@ -1009,6 +1085,107 @@ fun List<FishRecord>.toExportPackagePreview(): String {
         "|-- records.csv",
         "|-- images/"
     ) + imageLines).joinToString("\n")
+}
+
+fun Context.exportFishBoardRecords(records: List<FishRecord>): ExportPackageResult {
+    val documentsDirectory = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: filesDir
+    val exportDirectory = File(documentsDirectory, "exports")
+    val exportFile = File(
+        exportDirectory,
+        "FishBoardExport_${System.currentTimeMillis().formatExportDateTime()}.zip"
+    )
+
+    return writeFishBoardExportZip(
+        records = records,
+        outputFile = exportFile
+    )
+}
+
+fun writeFishBoardExportZip(
+    records: List<FishRecord>,
+    outputFile: File
+): ExportPackageResult {
+    outputFile.parentFile?.mkdirs()
+
+    var imageCount = 0
+    val missingImageRecords = mutableListOf<FishRecord>()
+
+    ZipOutputStream(FileOutputStream(outputFile)).use { zip ->
+        zip.writeTextEntry(
+            entryName = "records.csv",
+            text = records.toFishBoardCsv()
+        )
+
+        records.forEach { record ->
+            val imageFile = record.photoUri?.let { File(it) }
+
+            if (imageFile != null && imageFile.isFile) {
+                zip.writeFileEntry(
+                    entryName = record.photoRelativePath,
+                    file = imageFile
+                )
+                imageCount += 1
+            } else {
+                missingImageRecords.add(record)
+            }
+        }
+
+        if (missingImageRecords.isNotEmpty()) {
+            zip.writeTextEntry(
+                entryName = "missing_images.csv",
+                text = missingImageRecords.toMissingImagesCsv()
+            )
+        }
+    }
+
+    return ExportPackageResult(
+        file = outputFile,
+        recordCount = records.size,
+        imageCount = imageCount,
+        missingImageCount = missingImageRecords.size
+    )
+}
+
+fun List<FishRecord>.toMissingImagesCsv(): String {
+    val header = listOf(
+        "displayFishId",
+        "photoFilename",
+        "photoRelativePath",
+        "reason"
+    )
+    val rows = map { record ->
+        listOf(
+            record.displayFishId,
+            record.photoFilename,
+            record.photoRelativePath,
+            "Photo file not available in this prototype"
+        )
+    }
+
+    return (listOf(header) + rows)
+        .joinToString(separator = "\n") { row ->
+            row.joinToString(separator = ",") { value -> value.toCsvCell() }
+        }
+}
+
+fun ZipOutputStream.writeTextEntry(
+    entryName: String,
+    text: String
+) {
+    putNextEntry(ZipEntry(entryName))
+    write(text.toByteArray(Charsets.UTF_8))
+    closeEntry()
+}
+
+fun ZipOutputStream.writeFileEntry(
+    entryName: String,
+    file: File
+) {
+    putNextEntry(ZipEntry(entryName))
+    FileInputStream(file).use { input ->
+        input.copyTo(this)
+    }
+    closeEntry()
 }
 
 fun Double?.asPercentSuffix(): String {

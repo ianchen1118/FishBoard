@@ -247,11 +247,14 @@ Exports should support CSV and images, eventually as a ZIP package:
 ```text
 FishBoardExport_YYYY_MM_DD.zip
 |-- records.csv
+|-- missing_images.csv
 |-- images/
     |-- SESSION_ID/
         |-- SESSION_ID-F000001.jpg
         |-- SESSION_ID-F000002.jpg
 ```
+
+When real captured images are available, export should copy them into the matching `images/SESSION_ID/` folder. If a record points to an image that is not available, export should still succeed and list that record in `missing_images.csv` so missing photos are visible instead of silently ignored.
 
 Example CSV fields:
 
