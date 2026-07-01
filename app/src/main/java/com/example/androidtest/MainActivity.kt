@@ -534,6 +534,9 @@ fun RecordDetailScreen(
     var notesText by remember(record.internalId) {
         mutableStateOf(record.notes.orEmpty())
     }
+    var showTechnicalDetails by remember(record.internalId) {
+        mutableStateOf(false)
+    }
 
     ScreenContainer {
         Text(
@@ -552,8 +555,7 @@ fun RecordDetailScreen(
             )
             Text("Session: ${record.sessionId}")
             Text("Captured: ${record.formattedTimestamp()}")
-            Text("Internal ID: ${record.internalId}")
-            Text("Photo: ${record.photoRelativePath}")
+            Text("Photo: Linked")
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -597,6 +599,30 @@ fun RecordDetailScreen(
             minLines = 3,
             modifier = Modifier.fillMaxWidth()
         )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = { showTechnicalDetails = !showTechnicalDetails },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (showTechnicalDetails) "Hide Technical Details" else "Show Technical Details")
+        }
+
+        if (showTechnicalDetails) {
+            Spacer(modifier = Modifier.height(12.dp))
+
+            InfoCard {
+                Text(
+                    text = "Technical Details",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text("Internal ID: ${record.internalId}")
+                Text("Photo filename: ${record.photoFilename}")
+                Text("Photo relative path: ${record.photoRelativePath}")
+            }
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -645,6 +671,7 @@ fun ExportScreen(
     onBackClick: () -> Unit
 ) {
     val reviewedCount = records.count { it.reviewed }
+    var showTechnicalPreview by remember { mutableStateOf(false) }
     val csvPreview = remember(records) {
         records.toFishBoardCsv()
     }
@@ -673,49 +700,66 @@ fun ExportScreen(
 
         InfoCard {
             Text(
-                text = "CSV Preview",
+                text = "Export Package",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
             if (records.isEmpty()) {
                 Text("No records yet. Scan fish before exporting.")
             } else {
-                Text(
-                    text = csvPreview,
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Text("Ready to package records and linked fish photos.")
+                Text("${records.size} CSV rows")
+                Text("${records.size} linked photo files")
             }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        InfoCard {
-            Text(
-                text = "Package Layout Preview",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = records.toExportPackagePreview(),
-                style = MaterialTheme.typography.bodySmall
-            )
+        OutlinedButton(
+            onClick = { showTechnicalPreview = !showTechnicalPreview },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (showTechnicalPreview) "Hide Technical Preview" else "Show Technical Preview")
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        if (showTechnicalPreview) {
+            Spacer(modifier = Modifier.height(12.dp))
 
-        InfoCard {
-            Text(
-                text = "Next Export Step",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text("Future versions will write this CSV and matching images into a ZIP package.")
+            InfoCard {
+                Text(
+                    text = "CSV Preview",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                if (records.isEmpty()) {
+                    Text("No records yet. Scan fish before exporting.")
+                } else {
+                    Text(
+                        text = csvPreview,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            InfoCard {
+                Text(
+                    text = "Package Layout Preview",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = records.toExportPackagePreview(),
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -788,7 +832,7 @@ fun RecordSummary(record: FishRecord) {
     }
     Text("Session: ${record.sessionId}")
     Text("Fish number: ${record.fishNumber}")
-    Text("Photo: ${record.photoFilename}")
+    Text("Photo: Linked")
     Text("Captured: ${record.formattedTimestamp()}")
     Text("Reviewed: ${if (record.reviewed) "Yes" else "No"}")
 }
