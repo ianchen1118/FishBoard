@@ -62,6 +62,43 @@ location
 weight
 ```
 
+## Session and ID Strategy
+
+FishBoard should support many users, devices, locations, and offline field sessions without creating confusing duplicate IDs.
+
+Use two layers of identifiers:
+
+```text
+internal ID -> UUID for database/server use
+display fish ID -> human-readable ID for field use, CSV, labels, and support
+```
+
+Session IDs should group a field run:
+
+```text
+YYYYMMDD-LOCATION-DEVICE-S###
+```
+
+Example:
+
+```text
+20260701-PIER01-D03-S001
+```
+
+Fish IDs should add a fish sequence within the session:
+
+```text
+YYYYMMDD-LOCATION-DEVICE-S###-F######
+```
+
+Example:
+
+```text
+20260701-PIER01-D03-S001-F000001
+```
+
+This gives field users an ID they can read, while still making it much less likely that records collide when many fishing people or devices collect data offline.
+
 ## Main App Areas
 
 The app should be organized around these main screens:
