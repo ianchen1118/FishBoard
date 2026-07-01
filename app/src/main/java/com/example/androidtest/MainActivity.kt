@@ -1,7 +1,6 @@
 package com.example.androidtest
 
 import android.os.Bundle
-import android.text.format.DateFormat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -33,6 +32,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.androidtest.ui.theme.AndroidTestTheme
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -639,12 +641,72 @@ fun ExportScreen(
     records: List<FishRecord>,
     onBackClick: () -> Unit
 ) {
-    PlaceholderWorkflowScreen(
-        title = "Export Data",
-        body = "This will export records as CSV and images as a package.",
-        detail = "Current session has ${records.size} records ready for a future export flow.",
-        onBackClick = onBackClick
-    )
+    val reviewedCount = records.count { it.reviewed }
+    val csvPreview = remember(records) {
+        records.toFishBoardCsv()
+    }
+
+    ScreenContainer {
+        Text(
+            text = "Export Data",
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        InfoCard {
+            Text(
+                text = "Export Summary",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text("${records.size} total records")
+            Text("$reviewedCount reviewed records")
+            Text("${records.size - reviewedCount} records still need review")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        InfoCard {
+            Text(
+                text = "CSV Preview",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (records.isEmpty()) {
+                Text("No records yet. Scan fish before exporting.")
+            } else {
+                Text(
+                    text = csvPreview,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        InfoCard {
+            Text(
+                text = "Next Export Step",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text("Future versions will write this CSV and matching images into a ZIP package.")
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        OutlinedButton(
+            onClick = onBackClick,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Back")
+        }
+    }
 }
 
 @Composable
@@ -759,7 +821,7 @@ fun createScanSession(
     sessionNumber: Int,
     startedAtMillis: Long = System.currentTimeMillis()
 ): ScanSession {
-    val dateCode = DateFormat.format("yyyyMMdd", startedAtMillis).toString()
+    val dateCode = startedAtMillis.formatDateCode()
     val cleanLocationCode = locationCode.ifBlank { "FIELD" }.uppercase().filterSessionCode()
     val cleanDeviceCode = deviceCode.ifBlank { "D01" }.uppercase().filterSessionCode()
     val sessionPart = "S${sessionNumber.toString().padStart(3, '0')}"
@@ -802,11 +864,76 @@ fun createFakeFishRecord(
 }
 
 fun FishRecord.formattedTimestamp(): String {
-    return DateFormat.format("yyyy-MM-dd HH:mm:ss", timestampMillis).toString()
+    return timestampMillis.formatTimestamp()
+}
+
+fun Long.formatDateCode(): String {
+    return SimpleDateFormat("yyyyMMdd", Locale.US).format(Date(this))
+}
+
+fun Long.formatTimestamp(): String {
+    return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(this))
+}
+
+fun List<FishRecord>.toFishBoardCsv(): String {
+    val header = listOf(
+        "internalId",
+        "sessionId",
+        "displayFishId",
+        "fishNumber",
+        "timestamp",
+        "predictedSpecies",
+        "speciesConfidence",
+        "correctedSpecies",
+        "predictedLengthMm",
+        "lengthConfidence",
+        "correctedLengthMm",
+        "reviewed",
+        "photoPath",
+        "notes"
+    )
+
+    val rows = map { record ->
+        listOf(
+            record.internalId,
+            record.sessionId,
+            record.displayFishId,
+            record.fishNumber.toString(),
+            record.formattedTimestamp(),
+            record.species,
+            record.speciesConfidence.asCsvNumber(),
+            record.correctedSpecies.orEmpty(),
+            record.lengthMm.toString(),
+            record.lengthConfidence.asCsvNumber(),
+            record.correctedLengthMm?.toString().orEmpty(),
+            record.reviewed.toString(),
+            record.photoPath.orEmpty(),
+            record.notes.orEmpty()
+        )
+    }
+
+    return (listOf(header) + rows)
+        .joinToString(separator = "\n") { row ->
+            row.joinToString(separator = ",") { value -> value.toCsvCell() }
+        }
 }
 
 fun Double?.asPercentSuffix(): String {
     return this?.let { " (${(it * 100).toInt()}%)" } ?: ""
+}
+
+fun Double?.asCsvNumber(): String {
+    return this?.toString().orEmpty()
+}
+
+fun String.toCsvCell(): String {
+    val escaped = replace("\"", "\"\"")
+    val needsQuotes = any { it == ',' || it == '"' || it == '\n' || it == '\r' }
+    return if (needsQuotes) {
+        "\"$escaped\""
+    } else {
+        escaped
+    }
 }
 
 fun String.filterSessionCode(): String {
