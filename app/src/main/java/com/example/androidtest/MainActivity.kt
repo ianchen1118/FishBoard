@@ -57,6 +57,7 @@ enum class Screen {
     SessionSetup,
     RapidScan,
     Records,
+    RecordDetail,
     Calibration,
     Export
 }
@@ -80,7 +81,10 @@ data class FishRecord(
     val speciesConfidence: Double?,
     val lengthMm: Int,
     val lengthConfidence: Double?,
+    val correctedSpecies: String?,
+    val correctedLengthMm: Int?,
     val reviewed: Boolean,
+    val notes: String?,
     val photoPath: String?
 )
 
@@ -88,6 +92,7 @@ data class FishRecord(
 fun FishBoardApp() {
     var currentScreen by remember { mutableStateOf(Screen.Home) }
     var currentSession by remember { mutableStateOf<ScanSession?>(null) }
+    var selectedRecordId by remember { mutableStateOf<String?>(null) }
     var nextSessionNumber by remember { mutableStateOf(1) }
     val fishRecords = remember { mutableStateListOf<FishRecord>() }
 
@@ -141,7 +146,23 @@ fun FishBoardApp() {
 
         Screen.Records -> RecordsScreen(
             records = fishRecords,
+            onRecordClick = { record ->
+                selectedRecordId = record.internalId
+                currentScreen = Screen.RecordDetail
+            },
             onBackClick = { currentScreen = Screen.Home }
+        )
+
+        Screen.RecordDetail -> RecordDetailScreen(
+            record = fishRecords.firstOrNull { it.internalId == selectedRecordId },
+            onSave = { updatedRecord ->
+                val index = fishRecords.indexOfFirst { it.internalId == updatedRecord.internalId }
+                if (index >= 0) {
+                    fishRecords[index] = updatedRecord
+                }
+                currentScreen = Screen.Records
+            },
+            onBackClick = { currentScreen = Screen.Records }
         )
 
         Screen.Calibration -> CalibrationScreen(
@@ -428,6 +449,7 @@ fun RapidScanScreen(
 @Composable
 fun RecordsScreen(
     records: List<FishRecord>,
+    onRecordClick: (FishRecord) -> Unit,
     onBackClick: () -> Unit
 ) {
     ScreenContainer {
@@ -458,12 +480,138 @@ fun RecordsScreen(
             records.asReversed().forEach { record ->
                 InfoCard {
                     RecordSummary(record = record)
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedButton(
+                        onClick = { onRecordClick(record) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Open Record")
+                    }
                 }
                 Spacer(modifier = Modifier.height(10.dp))
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+
+        OutlinedButton(
+            onClick = onBackClick,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Back")
+        }
+    }
+}
+
+@Composable
+fun RecordDetailScreen(
+    record: FishRecord?,
+    onSave: (FishRecord) -> Unit,
+    onBackClick: () -> Unit
+) {
+    if (record == null) {
+        PlaceholderWorkflowScreen(
+            title = "Record Not Found",
+            body = "The selected record is no longer available.",
+            detail = "Go back to Review Records and choose another record.",
+            onBackClick = onBackClick
+        )
+        return
+    }
+
+    var speciesText by remember(record.internalId) {
+        mutableStateOf(record.correctedSpecies ?: record.species)
+    }
+    var lengthText by remember(record.internalId) {
+        mutableStateOf((record.correctedLengthMm ?: record.lengthMm).toString())
+    }
+    var notesText by remember(record.internalId) {
+        mutableStateOf(record.notes.orEmpty())
+    }
+
+    ScreenContainer {
+        Text(
+            text = "Record Detail",
+            style = MaterialTheme.typography.headlineLarge,
+            fontWeight = FontWeight.Bold
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        InfoCard {
+            Text(
+                text = record.displayFishId,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text("Session: ${record.sessionId}")
+            Text("Captured: ${record.formattedTimestamp()}")
+            Text("Internal ID: ${record.internalId}")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        InfoCard {
+            Text(
+                text = "AI / Placeholder Prediction",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text("Predicted species: ${record.species}${record.speciesConfidence.asPercentSuffix()}")
+            Text("Predicted length: ${record.lengthMm} mm${record.lengthConfidence.asPercentSuffix()}")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        TextField(
+            value = speciesText,
+            onValueChange = { speciesText = it },
+            label = { Text("Corrected species") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TextField(
+            value = lengthText,
+            onValueChange = { lengthText = it.filter { char -> char.isDigit() } },
+            label = { Text("Corrected length in mm") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        TextField(
+            value = notesText,
+            onValueChange = { notesText = it },
+            label = { Text("Notes") },
+            minLines = 3,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(
+            onClick = {
+                onSave(
+                    record.copy(
+                        correctedSpecies = speciesText.ifBlank { null },
+                        correctedLengthMm = lengthText.toIntOrNull(),
+                        reviewed = true,
+                        notes = notesText.ifBlank { null }
+                    )
+                )
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Save Review")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
 
         OutlinedButton(
             onClick = onBackClick,
@@ -552,6 +700,10 @@ fun RecordSummary(record: FishRecord) {
 
     Text("Species: ${record.species}${record.speciesConfidence.asPercentSuffix()}")
     Text("Length: ${record.lengthMm} mm${record.lengthConfidence.asPercentSuffix()}")
+    if (record.correctedSpecies != null || record.correctedLengthMm != null) {
+        Text("Corrected species: ${record.correctedSpecies ?: record.species}")
+        Text("Corrected length: ${record.correctedLengthMm ?: record.lengthMm} mm")
+    }
     Text("Session: ${record.sessionId}")
     Text("Fish number: ${record.fishNumber}")
     Text("Captured: ${record.formattedTimestamp()}")
@@ -641,7 +793,10 @@ fun createFakeFishRecord(
         speciesConfidence = confidence,
         lengthMm = 180 + (fishNumber * 17) % 220,
         lengthConfidence = 0.80 + (fishNumber % 3) * 0.04,
+        correctedSpecies = null,
+        correctedLengthMm = null,
         reviewed = false,
+        notes = null,
         photoPath = null
     )
 }
