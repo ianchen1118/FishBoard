@@ -1,10 +1,12 @@
 package com.example.androidtest
 
 import android.content.Context
+import android.content.Intent
 import android.os.Environment
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.content.FileProvider
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -94,6 +96,7 @@ data class FishRecord(
     val correctedSpecies: String?,
     val correctedLengthMm: Int?,
     val reviewed: Boolean,
+    val exportedAtMillis: Long?,
     val notes: String?,
     val photoFilename: String,
     val photoRelativePath: String,
@@ -190,6 +193,19 @@ fun FishBoardApp() {
 
         Screen.Export -> ExportScreen(
             records = fishRecords,
+            onMarkRecordsExported = { exportedRecords, exportedAtMillis ->
+                exportedRecords.forEach { exportedRecord ->
+                    val index = fishRecords.indexOfFirst { it.internalId == exportedRecord.internalId }
+                    if (index >= 0) {
+                        fishRecords[index] = fishRecords[index].copy(
+                            exportedAtMillis = exportedAtMillis
+                        )
+                    }
+                }
+            },
+            onDeleteExportedRecords = {
+                fishRecords.removeAll { it.exportedAtMillis != null }
+            },
             onBackClick = { currentScreen = Screen.Home }
         )
     }
@@ -683,15 +699,26 @@ fun CalibrationScreen(
 @Composable
 fun ExportScreen(
     records: List<FishRecord>,
+    onMarkRecordsExported: (List<FishRecord>, Long) -> Unit,
+    onDeleteExportedRecords: () -> Unit,
     onBackClick: () -> Unit
 ) {
     val context = LocalContext.current
-    val reviewedCount = records.count { it.reviewed }
+    val newRecordCount = records.count { it.exportedAtMillis == null }
+    val exportedRecordCount = records.count { it.exportedAtMillis != null }
+    var exportOnlyNewRecords by remember { mutableStateOf(true) }
     var showTechnicalPreview by remember { mutableStateOf(false) }
+    var confirmDeleteExported by remember { mutableStateOf(false) }
     var exportResult by remember { mutableStateOf<ExportPackageResult?>(null) }
     var exportError by remember { mutableStateOf<String?>(null) }
-    val csvPreview = remember(records) {
-        records.toFishBoardCsv()
+    val recordsToExport = if (exportOnlyNewRecords) {
+        records.filter { it.exportedAtMillis == null }
+    } else {
+        records
+    }
+    val reviewedCount = recordsToExport.count { it.reviewed }
+    val csvPreview = remember(recordsToExport) {
+        recordsToExport.toFishBoardCsv()
     }
 
     ScreenContainer {
@@ -710,8 +737,28 @@ fun ExportScreen(
                 fontWeight = FontWeight.Bold
             )
             Text("${records.size} total records")
-            Text("$reviewedCount reviewed records")
-            Text("${records.size - reviewedCount} records still need review")
+            Text("$newRecordCount new records")
+            Text("$exportedRecordCount already exported")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        InfoCard {
+            Text(
+                text = "Export Options",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text(if (exportOnlyNewRecords) "Exporting new records only" else "Exporting all records")
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = { exportOnlyNewRecords = !exportOnlyNewRecords },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (exportOnlyNewRecords) "Switch to Export All Records" else "Switch to New Records Only")
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -722,12 +769,13 @@ fun ExportScreen(
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
-            if (records.isEmpty()) {
-                Text("No records yet. Scan fish before exporting.")
+            if (recordsToExport.isEmpty()) {
+                Text("No records are ready for this export.")
             } else {
                 Text("Ready to package records and linked fish photos.")
-                Text("${records.size} CSV rows")
-                Text("${records.size} linked photo files")
+                Text("${recordsToExport.size} CSV rows")
+                Text("${recordsToExport.size} linked photo files")
+                Text("$reviewedCount reviewed records")
             }
         }
 
@@ -736,12 +784,15 @@ fun ExportScreen(
         Button(
             onClick = {
                 val result = runCatching {
-                    context.exportFishBoardRecords(records)
+                    context.exportFishBoardRecords(recordsToExport)
                 }
                 exportResult = result.getOrNull()
                 exportError = result.exceptionOrNull()?.message
+                if (result.isSuccess) {
+                    onMarkRecordsExported(recordsToExport, System.currentTimeMillis())
+                }
             },
-            enabled = records.isNotEmpty(),
+            enabled = recordsToExport.isNotEmpty(),
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Create Export Package")
@@ -773,6 +824,48 @@ fun ExportScreen(
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        val result = exportResult
+        if (result != null) {
+            Button(
+                onClick = { context.shareExportPackage(result.file) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Share Export Package")
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        InfoCard {
+            Text(
+                text = "Data Management",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+            Text("$exportedRecordCount records marked exported")
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = {
+                    if (confirmDeleteExported) {
+                        onDeleteExportedRecords()
+                        confirmDeleteExported = false
+                        exportResult = null
+                        exportError = null
+                    } else {
+                        confirmDeleteExported = true
+                    }
+                },
+                enabled = exportedRecordCount > 0,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (confirmDeleteExported) "Confirm Delete Exported Records" else "Delete Exported Records")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         OutlinedButton(
             onClick = { showTechnicalPreview = !showTechnicalPreview },
             modifier = Modifier.fillMaxWidth()
@@ -792,7 +885,7 @@ fun ExportScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                if (records.isEmpty()) {
+                if (recordsToExport.isEmpty()) {
                     Text("No records yet. Scan fish before exporting.")
                 } else {
                     Text(
@@ -814,7 +907,7 @@ fun ExportScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = records.toExportPackagePreview(),
+                    text = recordsToExport.toExportPackagePreview(),
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -997,6 +1090,7 @@ fun createFakeFishRecord(
         correctedSpecies = null,
         correctedLengthMm = null,
         reviewed = false,
+        exportedAtMillis = null,
         notes = null,
         photoFilename = photoFilename,
         photoRelativePath = photoRelativePath,
@@ -1038,6 +1132,7 @@ fun List<FishRecord>.toFishBoardCsv(): String {
         "lengthConfidence",
         "correctedLengthMm",
         "reviewed",
+        "exportedAt",
         "photoFilename",
         "photoRelativePath",
         "notes"
@@ -1057,6 +1152,7 @@ fun List<FishRecord>.toFishBoardCsv(): String {
             record.lengthConfidence.asCsvNumber(),
             record.correctedLengthMm?.toString().orEmpty(),
             record.reviewed.toString(),
+            record.exportedAtMillis?.formatTimestamp().orEmpty(),
             record.photoFilename,
             record.photoRelativePath,
             record.notes.orEmpty()
@@ -1099,6 +1195,20 @@ fun Context.exportFishBoardRecords(records: List<FishRecord>): ExportPackageResu
         records = records,
         outputFile = exportFile
     )
+}
+
+fun Context.shareExportPackage(file: File) {
+    val uri = FileProvider.getUriForFile(
+        this,
+        "${packageName}.fileprovider",
+        file
+    )
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "application/zip"
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    startActivity(Intent.createChooser(intent, "Share FishBoard Export"))
 }
 
 fun writeFishBoardExportZip(
