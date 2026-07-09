@@ -240,6 +240,17 @@ images/
 
 The CSV should not contain raw image bytes. It should contain the image filename and relative image path so each row can point back to the matching exported image.
 
+Current local storage direction:
+
+```text
+sessions -> Room table: scan_sessions
+records -> Room table: fish_records
+exported status -> fish_records.exportedAtMillis
+photos -> file storage, linked by filename / relative path
+```
+
+The app should treat Room as the local source of truth for sessions, fish records, review corrections, and export state.
+
 ## Export Shape
 
 Exports should support CSV and images, eventually as a ZIP package:

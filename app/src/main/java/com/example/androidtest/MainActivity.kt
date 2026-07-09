@@ -1,12 +1,8 @@
 package com.example.androidtest
 
-import android.content.Context
-import android.content.Intent
-import android.os.Environment
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.core.content.FileProvider
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -25,11 +21,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,19 +34,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.androidtest.ui.theme.AndroidTestTheme
-import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.UUID
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val repository = FishBoardRepository(
+            FishBoardDatabase.getDatabase(this).fishBoardDao()
+        )
 
         setContent {
             AndroidTestTheme {
@@ -57,66 +49,30 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    FishBoardApp()
+                    FishBoardApp(repository = repository)
                 }
             }
         }
     }
 }
 
-enum class Screen {
-    Home,
-    SessionSetup,
-    RapidScan,
-    Records,
-    RecordDetail,
-    Calibration,
-    Export
-}
-
-data class ScanSession(
-    val sessionId: String,
-    val dateCode: String,
-    val locationCode: String,
-    val deviceCode: String,
-    val sessionNumber: Int,
-    val startedAtMillis: Long
-)
-
-data class FishRecord(
-    val internalId: String,
-    val sessionId: String,
-    val fishNumber: Int,
-    val displayFishId: String,
-    val timestampMillis: Long,
-    val species: String,
-    val speciesConfidence: Double?,
-    val lengthMm: Int,
-    val lengthConfidence: Double?,
-    val correctedSpecies: String?,
-    val correctedLengthMm: Int?,
-    val reviewed: Boolean,
-    val exportedAtMillis: Long?,
-    val notes: String?,
-    val photoFilename: String,
-    val photoRelativePath: String,
-    val photoUri: String?
-)
-
-data class ExportPackageResult(
-    val file: File,
-    val recordCount: Int,
-    val imageCount: Int,
-    val missingImageCount: Int
-)
-
 @Composable
-fun FishBoardApp() {
+fun FishBoardApp(repository: FishBoardRepository) {
     var currentScreen by remember { mutableStateOf(Screen.Home) }
     var currentSession by remember { mutableStateOf<ScanSession?>(null) }
     var selectedRecordId by remember { mutableStateOf<String?>(null) }
-    var nextSessionNumber by remember { mutableStateOf(1) }
-    val fishRecords = remember { mutableStateListOf<FishRecord>() }
+    var sessions by remember { mutableStateOf<List<ScanSession>>(emptyList()) }
+    var fishRecords by remember { mutableStateOf<List<FishRecord>>(emptyList()) }
+    val coroutineScope = rememberCoroutineScope()
+    val nextSessionNumber = (sessions.maxOfOrNull { it.sessionNumber } ?: 0) + 1
+
+    LaunchedEffect(repository) {
+        repository.sessions.collect { sessions = it }
+    }
+
+    LaunchedEffect(repository) {
+        repository.records.collect { fishRecords = it }
+    }
 
     when (currentScreen) {
         Screen.Home -> HomeScreen(
@@ -140,12 +96,15 @@ fun FishBoardApp() {
         Screen.SessionSetup -> SessionSetupScreen(
             nextSessionNumber = nextSessionNumber,
             onStartSession = { locationCode, deviceCode ->
-                currentSession = createScanSession(
+                val session = createScanSession(
                     locationCode = locationCode,
                     deviceCode = deviceCode,
                     sessionNumber = nextSessionNumber
                 )
-                nextSessionNumber += 1
+                currentSession = session
+                coroutineScope.launch {
+                    repository.saveSession(session)
+                }
                 currentScreen = Screen.RapidScan
             },
             onBackClick = { currentScreen = Screen.Home }
@@ -159,7 +118,10 @@ fun FishBoardApp() {
             onSimulateScan = {
                 currentSession?.let { session ->
                     val nextFishNumber = fishRecords.count { it.sessionId == session.sessionId } + 1
-                    fishRecords.add(createFakeFishRecord(session, nextFishNumber))
+                    val record = createFakeFishRecord(session, nextFishNumber)
+                    coroutineScope.launch {
+                        repository.addRecord(record)
+                    }
                 }
             },
             onReviewRecordsClick = { currentScreen = Screen.Records },
@@ -178,9 +140,8 @@ fun FishBoardApp() {
         Screen.RecordDetail -> RecordDetailScreen(
             record = fishRecords.firstOrNull { it.internalId == selectedRecordId },
             onSave = { updatedRecord ->
-                val index = fishRecords.indexOfFirst { it.internalId == updatedRecord.internalId }
-                if (index >= 0) {
-                    fishRecords[index] = updatedRecord
+                coroutineScope.launch {
+                    repository.updateRecord(updatedRecord)
                 }
                 currentScreen = Screen.Records
             },
@@ -194,17 +155,14 @@ fun FishBoardApp() {
         Screen.Export -> ExportScreen(
             records = fishRecords,
             onMarkRecordsExported = { exportedRecords, exportedAtMillis ->
-                exportedRecords.forEach { exportedRecord ->
-                    val index = fishRecords.indexOfFirst { it.internalId == exportedRecord.internalId }
-                    if (index >= 0) {
-                        fishRecords[index] = fishRecords[index].copy(
-                            exportedAtMillis = exportedAtMillis
-                        )
-                    }
+                coroutineScope.launch {
+                    repository.markRecordsExported(exportedRecords, exportedAtMillis)
                 }
             },
             onDeleteExportedRecords = {
-                fishRecords.removeAll { it.exportedAtMillis != null }
+                coroutineScope.launch {
+                    repository.deleteExportedRecords()
+                }
             },
             onBackClick = { currentScreen = Screen.Home }
         )
@@ -1043,279 +1001,4 @@ fun InfoCard(content: @Composable ColumnScope.() -> Unit) {
             content = content
         )
     }
-}
-
-fun createScanSession(
-    locationCode: String,
-    deviceCode: String,
-    sessionNumber: Int,
-    startedAtMillis: Long = System.currentTimeMillis()
-): ScanSession {
-    val dateCode = startedAtMillis.formatDateCode()
-    val cleanLocationCode = locationCode.ifBlank { "FIELD" }.uppercase().filterSessionCode()
-    val cleanDeviceCode = deviceCode.ifBlank { "D01" }.uppercase().filterSessionCode()
-    val sessionPart = "S${sessionNumber.toString().padStart(3, '0')}"
-
-    return ScanSession(
-        sessionId = "$dateCode-$cleanLocationCode-$cleanDeviceCode-$sessionPart",
-        dateCode = dateCode,
-        locationCode = cleanLocationCode,
-        deviceCode = cleanDeviceCode,
-        sessionNumber = sessionNumber,
-        startedAtMillis = startedAtMillis
-    )
-}
-
-fun createFakeFishRecord(
-    session: ScanSession,
-    fishNumber: Int
-): FishRecord {
-    val fakeSpecies = listOf("Unknown", "Bluefish", "Striped Bass", "Sea Bass")
-    val species = fakeSpecies[(fishNumber - 1) % fakeSpecies.size]
-    val confidence = if (species == "Unknown") null else 0.70 + (fishNumber % 4) * 0.06
-    val fishPart = "F${fishNumber.toString().padStart(6, '0')}"
-    val photoFilename = "${session.sessionId}-$fishPart.jpg"
-    val photoRelativePath = "images/${session.sessionId}/$photoFilename"
-
-    return FishRecord(
-        internalId = UUID.randomUUID().toString(),
-        sessionId = session.sessionId,
-        fishNumber = fishNumber,
-        displayFishId = "${session.sessionId}-$fishPart",
-        timestampMillis = System.currentTimeMillis(),
-        species = species,
-        speciesConfidence = confidence,
-        lengthMm = 180 + (fishNumber * 17) % 220,
-        lengthConfidence = 0.80 + (fishNumber % 3) * 0.04,
-        correctedSpecies = null,
-        correctedLengthMm = null,
-        reviewed = false,
-        exportedAtMillis = null,
-        notes = null,
-        photoFilename = photoFilename,
-        photoRelativePath = photoRelativePath,
-        photoUri = null
-    )
-}
-
-fun FishRecord.formattedTimestamp(): String {
-    return timestampMillis.formatTimestamp()
-}
-
-fun Long.formatDateCode(): String {
-    return SimpleDateFormat("yyyyMMdd", Locale.US).format(Date(this))
-}
-
-fun Long.formatTimestamp(): String {
-    return SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(this))
-}
-
-fun Long.formatExportDate(): String {
-    return SimpleDateFormat("yyyy_MM_dd", Locale.US).format(Date(this))
-}
-
-fun Long.formatExportDateTime(): String {
-    return SimpleDateFormat("yyyy_MM_dd_HHmmss", Locale.US).format(Date(this))
-}
-
-fun List<FishRecord>.toFishBoardCsv(): String {
-    val header = listOf(
-        "internalId",
-        "sessionId",
-        "displayFishId",
-        "fishNumber",
-        "timestamp",
-        "predictedSpecies",
-        "speciesConfidence",
-        "correctedSpecies",
-        "predictedLengthMm",
-        "lengthConfidence",
-        "correctedLengthMm",
-        "reviewed",
-        "exportedAt",
-        "photoFilename",
-        "photoRelativePath",
-        "notes"
-    )
-
-    val rows = map { record ->
-        listOf(
-            record.internalId,
-            record.sessionId,
-            record.displayFishId,
-            record.fishNumber.toString(),
-            record.formattedTimestamp(),
-            record.species,
-            record.speciesConfidence.asCsvNumber(),
-            record.correctedSpecies.orEmpty(),
-            record.lengthMm.toString(),
-            record.lengthConfidence.asCsvNumber(),
-            record.correctedLengthMm?.toString().orEmpty(),
-            record.reviewed.toString(),
-            record.exportedAtMillis?.formatTimestamp().orEmpty(),
-            record.photoFilename,
-            record.photoRelativePath,
-            record.notes.orEmpty()
-        )
-    }
-
-    return (listOf(header) + rows)
-        .joinToString(separator = "\n") { row ->
-            row.joinToString(separator = ",") { value -> value.toCsvCell() }
-        }
-}
-
-fun List<FishRecord>.toExportPackagePreview(): String {
-    if (isEmpty()) {
-        return "FishBoardExport_YYYY_MM_DD.zip\n|-- records.csv\n|-- images/"
-    }
-
-    val imageLines = groupBy { it.sessionId }.flatMap { (sessionId, sessionRecords) ->
-        listOf("|   |-- $sessionId/") + sessionRecords.map { record ->
-            "|       |-- ${record.photoFilename}"
-        }
-    }
-
-    return (listOf(
-        "FishBoardExport_${first().timestampMillis.formatExportDate()}.zip",
-        "|-- records.csv",
-        "|-- images/"
-    ) + imageLines).joinToString("\n")
-}
-
-fun Context.exportFishBoardRecords(records: List<FishRecord>): ExportPackageResult {
-    val documentsDirectory = getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS) ?: filesDir
-    val exportDirectory = File(documentsDirectory, "exports")
-    val exportFile = File(
-        exportDirectory,
-        "FishBoardExport_${System.currentTimeMillis().formatExportDateTime()}.zip"
-    )
-
-    return writeFishBoardExportZip(
-        records = records,
-        outputFile = exportFile
-    )
-}
-
-fun Context.shareExportPackage(file: File) {
-    val uri = FileProvider.getUriForFile(
-        this,
-        "${packageName}.fileprovider",
-        file
-    )
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "application/zip"
-        putExtra(Intent.EXTRA_STREAM, uri)
-        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    }
-    startActivity(Intent.createChooser(intent, "Share FishBoard Export"))
-}
-
-fun writeFishBoardExportZip(
-    records: List<FishRecord>,
-    outputFile: File
-): ExportPackageResult {
-    outputFile.parentFile?.mkdirs()
-
-    var imageCount = 0
-    val missingImageRecords = mutableListOf<FishRecord>()
-
-    ZipOutputStream(FileOutputStream(outputFile)).use { zip ->
-        zip.writeTextEntry(
-            entryName = "records.csv",
-            text = records.toFishBoardCsv()
-        )
-
-        records.forEach { record ->
-            val imageFile = record.photoUri?.let { File(it) }
-
-            if (imageFile != null && imageFile.isFile) {
-                zip.writeFileEntry(
-                    entryName = record.photoRelativePath,
-                    file = imageFile
-                )
-                imageCount += 1
-            } else {
-                missingImageRecords.add(record)
-            }
-        }
-
-        if (missingImageRecords.isNotEmpty()) {
-            zip.writeTextEntry(
-                entryName = "missing_images.csv",
-                text = missingImageRecords.toMissingImagesCsv()
-            )
-        }
-    }
-
-    return ExportPackageResult(
-        file = outputFile,
-        recordCount = records.size,
-        imageCount = imageCount,
-        missingImageCount = missingImageRecords.size
-    )
-}
-
-fun List<FishRecord>.toMissingImagesCsv(): String {
-    val header = listOf(
-        "displayFishId",
-        "photoFilename",
-        "photoRelativePath",
-        "reason"
-    )
-    val rows = map { record ->
-        listOf(
-            record.displayFishId,
-            record.photoFilename,
-            record.photoRelativePath,
-            "Photo file not available in this prototype"
-        )
-    }
-
-    return (listOf(header) + rows)
-        .joinToString(separator = "\n") { row ->
-            row.joinToString(separator = ",") { value -> value.toCsvCell() }
-        }
-}
-
-fun ZipOutputStream.writeTextEntry(
-    entryName: String,
-    text: String
-) {
-    putNextEntry(ZipEntry(entryName))
-    write(text.toByteArray(Charsets.UTF_8))
-    closeEntry()
-}
-
-fun ZipOutputStream.writeFileEntry(
-    entryName: String,
-    file: File
-) {
-    putNextEntry(ZipEntry(entryName))
-    FileInputStream(file).use { input ->
-        input.copyTo(this)
-    }
-    closeEntry()
-}
-
-fun Double?.asPercentSuffix(): String {
-    return this?.let { " (${(it * 100).toInt()}%)" } ?: ""
-}
-
-fun Double?.asCsvNumber(): String {
-    return this?.toString().orEmpty()
-}
-
-fun String.toCsvCell(): String {
-    val escaped = replace("\"", "\"\"")
-    val needsQuotes = any { it == ',' || it == '"' || it == '\n' || it == '\r' }
-    return if (needsQuotes) {
-        "\"$escaped\""
-    } else {
-        escaped
-    }
-}
-
-fun String.filterSessionCode(): String {
-    return filter { it.isLetterOrDigit() }.take(12)
 }
